@@ -1,0 +1,20 @@
+# Shared defaults. Every other config inherits from this via `base: base.yaml`.
+data_dir: data
+out_dir: runs
+seed: 42
+max_len: 1024
+batch_size: 4
+grad_accum: 4
+epochs: 2
+lr: 2.0e-4
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+load_in_4bit: false
+logging_steps: 20
+
+# Checkpointing. Set hub_repo to null to disable uploads for a run.
+hub_repo: Yashhh999/fkjee
+hub_private: true
+save_steps: 500
+push_checkpoints: true

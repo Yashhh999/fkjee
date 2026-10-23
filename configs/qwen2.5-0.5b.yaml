@@ -1,0 +1,8 @@
+base: base.yaml
+name: qwen2.5-0.5b
+track: generative
+model_id: Qwen/Qwen2.5-0.5B-Instruct
+epochs: 3
+lr: 2.0e-4
+batch_size: 4
+grad_accum: 8

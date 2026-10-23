@@ -1,0 +1,8 @@
+base: base.yaml
+name: smollm2-135m
+track: generative
+model_id: HuggingFaceTB/SmolLM2-135M-Instruct
+epochs: 3
+lr: 3.0e-4
+batch_size: 8
+grad_accum: 4

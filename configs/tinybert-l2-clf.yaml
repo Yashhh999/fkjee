@@ -1,0 +1,11 @@
+base: base.yaml
+name: tinybert-l2-clf
+track: ranker
+model_id: cross-encoder/ms-marco-TinyBERT-L-2-v2
+# ~4.4M total params: the smallest thing worth measuring.
+# (prajjwal1/bert-tiny has the same size but ships no fast tokenizer.)
+max_len: 384
+epochs: 6
+lr: 1.0e-4
+batch_size: 8
+grad_accum: 2

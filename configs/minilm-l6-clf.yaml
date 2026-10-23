@@ -1,0 +1,10 @@
+base: base.yaml
+name: minilm-l6-clf
+track: ranker
+model_id: sentence-transformers/all-MiniLM-L6-v2
+# ~22.7M total params (6 layers, hidden 384).
+max_len: 384
+epochs: 4
+lr: 3.0e-5
+batch_size: 8
+grad_accum: 2
