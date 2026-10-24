@@ -40,6 +40,11 @@ def params_of(run_dir: Path) -> float | None:
     return round(total / 1e6, 2) if total else None
 
 
+def dev_acc_of(run_dir: Path) -> float | None:
+    """Best dev accuracy seen during training -- the collapse detector."""
+    return read_json(run_dir / "run.json").get("best_eval", {}).get("eval_accuracy")
+
+
 def extract(name: str, track: str, results_dir: Path) -> dict:
     data = read_json(results_dir / f"{name}.json")
     row = {"name": name, "track": track}
@@ -82,14 +87,14 @@ def write_report(rows: list[dict], out: Path) -> None:
         "",
         "## Predict (listwise ranker)",
         "",
-        "| model | params (M) | holdout | JEE | NEET | math | phy | chem | bio | abl_question | abl_options | abl_shuffle | jeebench |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| model | params (M) | dev | holdout | JEE | NEET | math | phy | chem | bio | abl_question | abl_options | abl_shuffle | jeebench |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rank:
         s = r.get("by_subject", {})
         e = r.get("by_exam", {})
         lines.append(
-            f"| {r['name']} | {r.get('params','-')} | {fmt(r.get('holdout'))} | "
+            f"| {r['name']} | {r.get('params','-')} | {fmt(r.get('dev'))} | {fmt(r.get('holdout'))} | "
             f"{fmt(e.get('jee',{}).get('accuracy'))} | {fmt(e.get('neet',{}).get('accuracy'))} | "
             f"{fmt(s.get('math',{}).get('accuracy'))} | {fmt(s.get('physics',{}).get('accuracy'))} | "
             f"{fmt(s.get('chemistry',{}).get('accuracy'))} | {fmt(s.get('biology',{}).get('accuracy'))} | "
@@ -168,6 +173,7 @@ def main() -> None:
                    + (["--limit", str(args.limit)] if args.limit else []), env)
                 row = extract(name, track, results_dir)
                 row["params"] = params_of(Path(f"runs/{name}"))
+                row["dev"] = dev_acc_of(Path(f"runs/{name}"))
             else:
                 sh([py, "-m", "fkjee.train", "--config", str(p)]
                    + (["--epochs", str(args.epochs)] if args.epochs else [])

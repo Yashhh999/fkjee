@@ -6,6 +6,8 @@ model_id: cross-encoder/ms-marco-TinyBERT-L-2-v2
 # (prajjwal1/bert-tiny has the same size but ships no fast tokenizer.)
 max_len: 384
 epochs: 6
-lr: 1.0e-4
+lr: 2.0e-5
+head_lr: null          # pretrained ms-marco head: use the encoder LR
 batch_size: 8
 grad_accum: 2
+eval_steps: 100

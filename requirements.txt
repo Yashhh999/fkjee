@@ -1,4 +1,5 @@
 torch>=2.3
+numpy>=1.24
 transformers>=4.44
 peft>=0.12
 accelerate>=0.33

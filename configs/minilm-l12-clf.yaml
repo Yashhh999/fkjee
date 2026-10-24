@@ -1,10 +1,13 @@
 base: base.yaml
 name: minilm-l12-clf
 track: ranker
-model_id: sentence-transformers/all-MiniLM-L12-v2
-# ~33.4M total params (12 layers, hidden 384).
+# ~33.4M total params (12 layers, hidden 384). True cross-encoder, not the
+# bi-encoder all-MiniLM-L12-v2.
+model_id: cross-encoder/ms-marco-MiniLM-L-12-v2
 max_len: 384
 epochs: 4
-lr: 2.5e-5
+lr: 2.0e-5
+head_lr: null          # pretrained ms-marco head: use the encoder LR
 batch_size: 8
 grad_accum: 2
+eval_steps: 100

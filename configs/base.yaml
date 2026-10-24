@@ -7,6 +7,13 @@ batch_size: 4
 grad_accum: 4
 epochs: 2
 lr: 2.0e-4
+# Ranker knobs (ignored by the generative track).
+# query_mode: full     -> query contains the question AND all four options
+#             question -> query is the question only (classic cross-encoder)
+query_mode: full
+head_lr: null          # separate LR for a *fresh* head; null = use lr. The
+                       # ms-marco cross-encoder head is pretrained: leave null.
+eval_steps: 100        # eval_loss is the honest 4-way CE; watch it, not "loss"
 lora_r: 16
 lora_alpha: 32
 lora_dropout: 0.05

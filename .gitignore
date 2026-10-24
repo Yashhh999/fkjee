@@ -8,3 +8,7 @@ runs/
 results/
 *.csv
 .venv/
+# local agent state, never commit
+opencode.db
+*_backup.md
+current_session_backup.md

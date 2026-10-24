@@ -71,11 +71,13 @@ src/fkjee/
   parsing.py     \boxed{} / "option (C)" / numeric extraction
   metrics.py     exact-match scoring, per-subject/exam/chapter breakdown
   classifier.py  the tiny listwise ranker (predict track)
+  lexical.py     8-parameter lexical ranker (the floor)
   train.py       LoRA/QLoRA SFT (solve track)
   evaluate.py    greedy generation + scoring
   hub.py         optional checkpoint/eval upload to the HF Hub
 configs/         one YAML per model
-scripts/run_sweep.py   train+eval every config, emit results/sweep.md
+scripts/run_sweep.py    train+eval every config, emit results/sweep.md
+scripts/ranker_probe.py frozen-feature probe: is the answer signal in the encoder at all?
 tests/           50 unit tests, no GPU or torch needed
 ```
 
@@ -94,9 +96,12 @@ Training on Kaggle (2×T4):
 ```bash
 git clone <this-repo> /kaggle/working/fkjee && cd /kaggle/working/fkjee
 bash scripts/kaggle_setup.sh
-python scripts/run_sweep.py --only tinybert minilm    # rankers first: minutes, not hours
-python scripts/run_sweep.py --only smollm2 qwen       # generators: hours
+python scripts/ranker_probe.py                         # ~4 min: is the signal there?
+python scripts/run_sweep.py --only tinybert minilm     # rankers first: minutes, not hours
+python scripts/run_sweep.py --only smollm2 qwen        # generators: hours
 ```
+
+Or paste the single cell in [`kaggle-run.md`](kaggle-run.md), which does all of the above.
 
 Single runs:
 
@@ -163,19 +168,77 @@ Knobs (in `configs/base.yaml`, overridable per model):
 | `save_total_limit` | `2` | keep only the last N local checkpoints |
 | `push_checkpoints` | `true` | upload each checkpoint |
 
-## What to expect
+## Results so far (measured, not predicted)
 
-These are **falsifiable predictions**, not measured results — the sweep has not been run yet
-(there is no GPU in this workspace).
+### The ranker track is at chance
 
-* 4.4M ranker: likely 27–33% — barely above chance, useful as a floor.
-* 22–33M ranker: likely 32–42%. This is where a tiny model starts to be genuinely better than
-  guessing on easy/definitional questions.
+These are the **first (bi-encoder) checkpoints**, trained before the diagnosis below. They are why
+the code now uses true cross-encoders and a frozen-feature probe.
+
+| model | params | holdout acc | n | note |
+|---|---:|---:|---:|---|
+| `minilm-l6-clf` (bi-encoder) | 22.7M | **0.252** | 1,684 | ±1.1% SE, chance = 0.25 |
+| `minilm-l12-clf` (bi-encoder) | 33.4M | **0.250** | 1,684 | every ablation also ≈ 0.25 |
+| lexical baseline | **8 params** | **0.259** | 1,684 | 7 TF-IDF/length/numeric features + bias |
+
+That lexical baseline is the important row: **seven hand-built features plus a bias score the same
+as a 33M encoder**, so the options are not separable from surface form either. The collapse is not a
+subtle tuning issue.
+
+Diagnostics that ruled out the obvious causes:
+
+* **`loss` was mislogged, not broken.** `Trainer` logs the *sum* of micro-batch losses divided by
+  optimizer steps, so `gradient_accum=2` reported 2 × CE. The flat 2.773 was `ln 16` = 2 × `ln 4`,
+  not a 16-way problem. Fixed: `loss` is now the true CE, `loss_raw` keeps the old value.
+* **Gold labels verified** by hand on sampled rows (`correct_option` is `["A"]..["D"]` in option
+  order).
+* **Truncation was real but small** — 6.6% of questions lost option text entirely. Fixed with
+  `encode_pair()`, which reserves budget for the option instead of truncating the tail of the pair.
+* **Frozen-feature linear probe** (TinyBERT-L2, 1,200 train / 240 dev): train CE 1.336 / acc 0.343,
+  dev CE 1.410 / acc 0.246. Train dips below `ln 4`, dev rises *above* it: it memorises 1,200
+  questions and generalises to nothing. `query_mode=question` and mean-over-option-tokens pooling
+  give the same picture.
+* **MiniLM-L6 frozen probe** (800 train / 200 dev, `max_len=192`): the best row (`full` query, CLS
+  pooling) gets train CE 1.353 / acc 0.317 and dev CE 1.386 / acc 0.295 ± 0.031 SE — a weak bump
+  that is within ~1.5 SE of chance. Mean-over-option-tokens pooling fits the train split hard
+  (0.444) and is at chance on dev, i.e. pure memorisation. The 22.7M cross-encoder carries at most
+  a sliver of generalising signal.
+* **Learning rate is not the issue** — 2.5e-5, 2e-4 and 5e-4 all stay at `ln 4`.
+
+`scripts/ranker_probe.py` reproduces the probe in ~10 minutes on a GPU and labels every row
+`SIGNAL` / `weak` / `memorises` / `flat`, so a dead encoder is identified before an hour is spent
+fine-tuning it.
+
+The recipe now under test (one Kaggle run, not more tuning):
+
+* true cross-encoder (`cross-encoder/ms-marco-*`) with its **pretrained** scoring head, so encoder
+  and head share one LR (`2e-5`); `head_lr` stays `null` and exists only for fresh heads;
+* option-safe `encode_pair()` truncation, so a long question can no longer delete the option;
+* `query_mode: full` (the probe's best cell), with `question` available as a switch;
+* true 4-way CE in the log (`loss`), raw value kept as `loss_raw`;
+* `eval_accuracy` / `eval_loss` on 256 dev questions every 100 steps, recorded in `run.json` as
+  `evals` and `best_eval`, and surfaced as the `dev` column in `results/sweep.md`.
+
+### The generator track is unmeasured
+
+No GPU was available in the development environment, so the LoRA numbers below are **predictions**,
+not results. Do not quote them as findings.
+
 * 139M generator: likely 25–33%; small generators often collapse to a letter prior.
 * 0.5–1.5B generator: likely 35–50%.
 
 JEE Advanced (JEEBench) will be much lower than JEE Main for every model — it is both harder and
 out-of-domain. Do not expect any model here to clear 50% overall.
+
+### What this means
+
+A 4.4M–33.4M cross-encoder is **below the threshold for JEE-style MCQs**: the task needs subject
+knowledge that these encoders do not carry, and the option-ranking framing gives them no way to
+derive an answer. The frozen-feature probes agree: TinyBERT-L2 generalises to nothing, and
+MiniLM-L6's best cell is 0.295 ± 0.031 — a weak, within-noise bump. The honest next step is the
+generator track (which can reason in text) or a much larger ranker — not more epochs on the same
+22M checkpoint. The fixed fine-tune recipe is still worth exactly **one** run, because the
+pretrained MS MARCO head may extract more than a linear probe can.
 
 ## Limitations
 

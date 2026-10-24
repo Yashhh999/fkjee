@@ -1,10 +1,18 @@
 base: base.yaml
 name: minilm-l6-clf
 track: ranker
-model_id: sentence-transformers/all-MiniLM-L6-v2
-# ~22.7M total params (6 layers, hidden 384).
+# True cross-encoder (trained MS MARCO relevance head), NOT the bi-encoder
+# sentence-transformers/all-MiniLM-L6-v2: same 22.7M params, but the scoring
+# head is pretrained instead of random, which is what stops the collapse to a
+# constant score.
+model_id: cross-encoder/ms-marco-MiniLM-L-6-v2
 max_len: 384
 epochs: 4
-lr: 3.0e-5
+# One LR for encoder + head: the ms-marco scoring head is pretrained, so it must
+# NOT get the 50x step a random head needs. (Verified: no "newly initialized"
+# warning when loading with num_labels=1, i.e. the head weights are kept.)
+lr: 2.0e-5
+head_lr: null
 batch_size: 8
 grad_accum: 2
+eval_steps: 100
