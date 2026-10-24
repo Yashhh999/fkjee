@@ -85,8 +85,8 @@ if PROBE:
             rows_m = [r for r in probe["rows"] if r["model"] == model]
             best = max(rows_m, key=lambda r: r["dev_acc"])
             print(f"{model.split('/')[-1]:24s} best dev {best['dev_acc']:.3f} | "
-                  f"train CE {best['train_ce']:.3f} | {best['query_mode']}/{best['pooling']}",
-                  flush=True)
+                  f"train CE {best['train_ce']:.3f} | {best['query_mode']}/{best['pooling']} "
+                  f"[{best['verdict']}]", flush=True)
         try:
             from huggingface_hub import HfApi
             if os.environ.get("HF_TOKEN"):
