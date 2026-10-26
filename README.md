@@ -56,10 +56,13 @@ the above", topic priors). The ranker is therefore evaluated four ways on the sa
 |---|---|---|
 | `none` | normal | headline accuracy |
 | `question` | blanks the question, keeps options | if ≫ 0.25, the model is reading option *shape*, not the problem |
-| `options` | blanks option text, keeps question | if ≫ 0.25, it is not using option content at all |
+| `solo` | drops the option set from the query; scores question vs one option | if it matches `none`, the other three options contributed nothing |
 | `shuffle` | permutes options per question | a big drop from `none` means letter/position bias |
 
-A result is only believable when `none` is well above chance **and** both ablations fall to ~0.25.
+A result is only believable when `none` is well above chance **and** the ablations stay near 0.25.
+Note there is no "blank the option text" ablation: replacing all four option texts with the same
+placeholder makes the four logits identical, so accuracy is 0.25 **by construction**. It looks like
+a clean result and measures nothing.
 
 ## Layout
 
@@ -87,7 +90,7 @@ Data prep and tests need only Python ≥ 3.10 (no torch):
 
 ```bash
 make data          # ~1-2 min, downloads are cached in data/raw/
-make test          # 47 tests
+make test          # 50 tests
 head -30 data/coverage.md
 ```
 
@@ -108,7 +111,7 @@ Single runs:
 ```bash
 python -m fkjee.classifier train --config configs/minilm-l6-clf.yaml
 python -m fkjee.classifier eval  --model-dir runs/minilm-l6-clf \
-    --ablate none question options shuffle
+    --ablate none question solo shuffle
 
 python -m fkjee.train    --config configs/qwen2.5-0.5b.yaml
 python -m fkjee.evaluate --run runs/qwen2.5-0.5b \
@@ -134,7 +137,9 @@ logs `it/s` — and trust that over this table.
 | `qwen2.5-1.5b` | 1.5B | 3–5 h | 45–60 min | **~4–5 h** |
 
 Full sweep ≈ **10–14 GPU-hours**. Kaggle gives ~30 GPU-h/week but caps a session at 12 h, so run
-rankers first (minutes), then one generator per session and `--resume` if you get cut off.
+one generator per session and `--resume` if you get cut off. Generator eval in the sweep is a
+500-question holdout slice plus all 94 JEEBench questions (generation-bound); override with
+`eval_limit` / `max_new_tokens` in the config if you want the full 2,354.
 
 ## Checkpointing to the Hub
 
@@ -170,75 +175,82 @@ Knobs (in `configs/base.yaml`, overridable per model):
 
 ## Results so far (measured, not predicted)
 
-### The ranker track is at chance
+Every number below comes from a Kaggle T4 run; `results/sweep.md` and the per-model JSONs are
+uploaded to the Hub. Chance is 0.25 for every MCQ number.
 
-These are the **first (bi-encoder) checkpoints**, trained before the diagnosis below. They are why
-the code now uses true cross-encoders and a frozen-feature probe.
+### The predict track is at chance
 
-| model | params | holdout acc | n | note |
-|---|---:|---:|---:|---|
-| `minilm-l6-clf` (bi-encoder) | 22.7M | **0.252** | 1,684 | ±1.1% SE, chance = 0.25 |
-| `minilm-l12-clf` (bi-encoder) | 33.4M | **0.250** | 1,684 | every ablation also ≈ 0.25 |
-| lexical baseline | **8 params** | **0.259** | 1,684 | 7 TF-IDF/length/numeric features + bias |
+| model | params | dev peak | holdout acc | n |
+|---|---:|---:|---:|---:|
+| `minilm-l6-clf` (ms-marco cross-encoder) | 22.7M | 0.328 | **0.262** | 1,684 |
+| `minilm-l12-clf` (ms-marco cross-encoder) | 33.4M | 0.304 | **0.253** | 1,684 |
+| lexical baseline (7 features + bias) | **8 params** | - | **0.259** | 1,684 |
+| chance | 0 | 0.25 | 0.250 | 1,684 |
 
-That lexical baseline is the important row: **seven hand-built features plus a bias score the same
-as a 33M encoder**, so the options are not separable from surface form either. The collapse is not a
-subtle tuning issue.
+The standard error at n=1,684 is ±1.1 pp. `0.262` is +1.1 pp, i.e. about **1 SE above chance** --
+not a result. The 33M model is *below* the 8-parameter lexical baseline.
 
-Diagnostics that ruled out the obvious causes:
+The above-chance cells in the sweep are all small-n and not reliable:
 
-* **`loss` was mislogged, not broken.** `Trainer` logs the *sum* of micro-batch losses divided by
-  optimizer steps, so `gradient_accum=2` reported 2 × CE. The flat 2.773 was `ln 16` = 2 × `ln 4`,
-  not a 16-way problem. Fixed: `loss` is now the true CE, `loss_raw` keeps the old value.
-* **Gold labels verified** by hand on sampled rows (`correct_option` is `["A"]..["D"]` in option
-  order).
-* **Truncation was real but small** — 6.6% of questions lost option text entirely. Fixed with
-  `encode_pair()`, which reserves budget for the option instead of truncating the tail of the pair.
-* **Frozen-feature linear probe** (TinyBERT-L2, 1,200 train / 240 dev): train CE 1.336 / acc 0.343,
-  dev CE 1.410 / acc 0.246. Train dips below `ln 4`, dev rises *above* it: it memorises 1,200
-  questions and generalises to nothing. `query_mode=question` and mean-over-option-tokens pooling
-  give the same picture.
-* **MiniLM-L6 frozen probe** (800 train / 200 dev, `max_len=192`): the best row (`full` query, CLS
-  pooling) gets train CE 1.353 / acc 0.317 and dev CE 1.386 / acc 0.295 ± 0.031 SE — a weak bump
-  that is within ~1.5 SE of chance. Mean-over-option-tokens pooling fits the train split hard
-  (0.444) and is at chance on dev, i.e. pure memorisation. The 22.7M cross-encoder carries at most
-  a sliver of generalising signal.
-* **Learning rate is not the issue** — 2.5e-5, 2e-4 and 5e-4 all stay at `ln 4`.
+* chemistry (`minilm-l6` 0.302, n≈345, SE ±2.5 pp) — the only cell worth re-testing on a bigger
+  chemistry holdout;
+* NEET (0.332, n=187, SE ±3.4 pp) and JEEBench (0.308-0.351, n=94, SE ±4.9 pp) — both inside
+  ~2 SE of chance;
+* the ablations move by less than 1 SE in either direction, so there is no evidence the model uses
+  option content, option order, or letter position.
 
-`scripts/ranker_probe.py` reproduces the probe in ~10 minutes on a GPU and labels every row
-`SIGNAL` / `weak` / `memorises` / `flat`, so a dead encoder is identified before an hour is spent
-fine-tuning it.
+### The frozen-feature probe says the same thing
 
-The recipe now under test (one Kaggle run, not more tuning):
+`scripts/ranker_probe.py` (2,000 train / 400 dev, linear head on frozen features, 3 encoders ×
+2 query modes × 2 poolings) printed:
 
-* true cross-encoder (`cross-encoder/ms-marco-*`) with its **pretrained** scoring head, so encoder
-  and head share one LR (`2e-5`); `head_lr` stays `null` and exists only for fresh heads;
-* option-safe `encode_pair()` truncation, so a long question can no longer delete the option;
-* `query_mode: full` (the probe's best cell), with `question` available as a switch;
-* true 4-way CE in the log (`loss`), raw value kept as `loss_raw`;
-* `eval_accuracy` / `eval_loss` on 256 dev questions every 100 steps, recorded in `run.json` as
-  `evals` and `best_eval`, and surfaced as the `dev` column in `results/sweep.md`.
+```
+ms-marco-MiniLM-L-12-v2  best dev 0.247 | train CE 1.379 | question/cls [flat]
+ms-marco-MiniLM-L-6-v2   best dev 0.270 | train CE 1.365 | question/cls [memorises]
+ms-marco-TinyBERT-L-2-v2 best dev 0.252 | train CE 1.351 | full/doc       [memorises]
+VERDICT: no generalising signal in any encoder tested.
+```
 
-### The generator track is unmeasured
+`memorises` means it fits the train questions (CE below `ln 4`) and falls back to chance on dev.
+That is the signature of a 22M encoder that has seen the words but cannot do the physics, and
+fine-tuning cannot supply knowledge that is not in the weights.
 
-No GPU was available in the development environment, so the LoRA numbers below are **predictions**,
-not results. Do not quote them as findings.
+### So it is not a training bug
 
-* 139M generator: likely 25–33%; small generators often collapse to a letter prior.
-* 0.5–1.5B generator: likely 35–50%.
+Four independent checks now agree:
 
-JEE Advanced (JEEBench) will be much lower than JEE Main for every model — it is both harder and
-out-of-domain. Do not expect any model here to clear 50% overall.
+* **Loss logging** was genuinely wrong at first (`Trainer` logs the micro-batch sum divided by
+  optimizer steps, so `grad_accum=2` doubled it: a flat 2.773 was `ln 16`, not a 16-way problem).
+  It is now the true 4-way CE in `loss`, with `loss_raw` kept for comparison; the run that produced
+  the table above logged ~1.39 (= `ln 4`) and moved to 1.38 at its best.
+* **Truncation** did delete option text on 6.6% of questions, so `encode_pair()` now reserves space
+  for the option. Fixing it changed nothing measurable.
+* **Learning rate / head initialisation** was the real bug in the bi-encoder version: a fresh
+  scoring head given a 50x LR collapsed. The current models use the *pretrained* MS MARCO head with
+  one LR (`2e-5`) and load without a "newly initialised" warning.
+* **A frozen linear probe**, an 8-parameter lexical model, and full fine-tunes of 4.4M / 22.7M /
+  33.4M encoders all land at 0.25-0.26. Three different capacities, one answer.
 
-### What this means
+### What changed in the harness because of this
 
-A 4.4M–33.4M cross-encoder is **below the threshold for JEE-style MCQs**: the task needs subject
-knowledge that these encoders do not carry, and the option-ranking framing gives them no way to
-derive an answer. The frozen-feature probes agree: TinyBERT-L2 generalises to nothing, and
-MiniLM-L6's best cell is 0.295 ± 0.031 — a weak, within-noise bump. The honest next step is the
-generator track (which can reason in text) or a much larger ranker — not more epochs on the same
-22M checkpoint. The fixed fine-tune recipe is still worth exactly **one** run, because the
-pretrained MS MARCO head may extract more than a linear probe can.
+* the saved weights are now the **best-dev checkpoint**, not the last step (`load_best_model_at_end`
+  with `save_steps == eval_steps`; verified byte-identical to `checkpoint-<best>`);
+* dev evaluation covers **all ~370 dev MCQ** (`eval_limit: 500`) instead of the first 256 raw rows;
+* the broken `options` ablation is replaced by `solo` (question vs one option, no option set in the
+  query) -- see [Ablations](#ablations-why-you-should-not-trust-a-raw-accuracy-number);
+* generator eval scores an evenly-spaced 500-question slice, so a 1.5B eval cannot eat the session.
+
+### The generator track is the open question
+
+The rankers are measured negative: **below the threshold for JEE-style MCQs**. The 139M-1.5B
+generators can at least write a derivation, so they are the honest next test -- but they are
+**not yet measured**, and no prediction is quoted as a result. What the first runs will tell us:
+
+* if `smollm2-135m` sits at 0.25 with a majority-letter `pred_distribution`, it learned the format
+  and nothing else, and 139M is too small;
+* if accuracy rises with scale (0.25 -> 0.3 -> ...) the bottleneck is capacity/knowledge, which is
+  a real finding about the "smallest model that can answer JEE" question;
+* a high `parsed` rate with low accuracy means the model solves the format, not the physics.
 
 ## Limitations
 

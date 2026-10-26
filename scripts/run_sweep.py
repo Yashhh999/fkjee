@@ -53,7 +53,7 @@ def extract(name: str, track: str, results_dir: Path) -> dict:
         for key, label in [
             ("holdout/none", "holdout"),
             ("holdout/question", "abl_question"),
-            ("holdout/options", "abl_options"),
+            ("holdout/solo", "abl_solo"),
             ("holdout/shuffle", "abl_shuffle"),
             ("jeebench/none", "jeebench"),
         ]:
@@ -82,12 +82,13 @@ def write_report(rows: list[dict], out: Path) -> None:
         "# fkjee sweep",
         "",
         "Held-out = every paper at/after the holdout year (JEE 2024+, NEET 2026).",
-        "JEEBench = 110 single-correct JEE Advanced MCQs (out-of-domain).",
+        "JEEBench = 94 single-correct JEE Advanced MCQs (out-of-domain).",
         "Chance = 0.25. `abl_question` blanks the question and keeps only options.",
+        "`abl_solo` scores each option against the question alone (no option set in the query).",
         "",
         "## Predict (listwise ranker)",
         "",
-        "| model | params (M) | dev | holdout | JEE | NEET | math | phy | chem | bio | abl_question | abl_options | abl_shuffle | jeebench |",
+        "| model | params (M) | dev | holdout | JEE | NEET | math | phy | chem | bio | abl_question | abl_solo | abl_shuffle | jeebench |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rank:
@@ -98,7 +99,7 @@ def write_report(rows: list[dict], out: Path) -> None:
             f"{fmt(e.get('jee',{}).get('accuracy'))} | {fmt(e.get('neet',{}).get('accuracy'))} | "
             f"{fmt(s.get('math',{}).get('accuracy'))} | {fmt(s.get('physics',{}).get('accuracy'))} | "
             f"{fmt(s.get('chemistry',{}).get('accuracy'))} | {fmt(s.get('biology',{}).get('accuracy'))} | "
-            f"{fmt(r.get('abl_question'))} | {fmt(r.get('abl_options'))} | "
+            f"{fmt(r.get('abl_question'))} | {fmt(r.get('abl_solo'))} | "
             f"{fmt(r.get('abl_shuffle'))} | {fmt(r.get('jeebench'))} |"
         )
 
@@ -125,8 +126,10 @@ def write_report(rows: list[dict], out: Path) -> None:
         "## Reading the ablation columns",
         "",
         "- `abl_question` ~= 0.25 means the model is not exploiting option shape alone.",
-        "- `abl_options` ~= 0.25 means option *content* is doing real work.",
+        "- `abl_solo` ~= holdout means the option set in the query is doing no work.",
         "- `abl_shuffle` should track `holdout`; a large drop means letter/position bias.",
+        "- `dev` is the best 4-way accuracy seen on all of dev during training; the",
+        "  saved weights are that best checkpoint, not the last step.",
         "",
     ]
     out.write_text("\n".join(lines), encoding="utf-8")
@@ -168,7 +171,7 @@ def main() -> None:
                    + (["--limit", str(args.limit)] if args.limit else []), env)
                 sh([py, "-m", "fkjee.classifier", "eval",
                     "--model-dir", f"runs/{name}",
-                    "--ablate", "none", "question", "options", "shuffle",
+                    "--ablate", "none", "question", "solo", "shuffle",
                     "--out", str(results_dir / f"{name}.json")]
                    + (["--limit", str(args.limit)] if args.limit else []), env)
                 row = extract(name, track, results_dir)
@@ -178,10 +181,16 @@ def main() -> None:
                 sh([py, "-m", "fkjee.train", "--config", str(p)]
                    + (["--epochs", str(args.epochs)] if args.epochs else [])
                    + (["--limit", str(args.limit)] if args.limit else []), env)
+                # Generation is the slow part: 2.3k holdout items x up to 384 new
+                # tokens each can outlast a Kaggle session on its own.  Score a
+                # fixed slice (500 questions ~= 2% SE) instead of the full set.
+                gen_limit = args.limit or cfg.get("eval_limit", 500)
                 sh([py, "-m", "fkjee.evaluate", "--run", f"runs/{name}",
                     "--files", "data/test_holdout.jsonl", "data/jeebench_mcq.jsonl",
-                    "--out", str(results_dir / f"{name}.json")]
-                   + (["--limit", str(args.limit)] if args.limit else []), env)
+                    "--sample", str(gen_limit),
+                    "--max-new-tokens", str(cfg.get("max_new_tokens", 384)),
+                    "--batch-size", str(cfg.get("eval_batch_size", 16)),
+                    "--out", str(results_dir / f"{name}.json")], env)
                 row = extract(name, track, results_dir)
                 row["params"] = params_of(Path(f"runs/{name}"))
             rows.append(row)

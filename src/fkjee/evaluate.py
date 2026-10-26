@@ -83,6 +83,19 @@ def score(generations: list[str], items: list[Item], tag: str) -> tuple[dict, li
     return summarize(records, name=tag), records
 
 
+def take_evenly(items: list[Item], n: int | None) -> list[Item]:
+    """Deterministic evenly-spaced sample.
+
+    Generator eval is generation-bound, so we score a slice.  Taking the first
+    N rows would score whichever paper happens to be first, so spread the slice
+    across the whole suite instead (same ordering, no RNG to explain).
+    """
+    if not n or len(items) <= n:
+        return items
+    step = len(items) / n
+    return [items[int(i * step)] for i in range(n)]
+
+
 def evaluate(args: argparse.Namespace) -> dict:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cpu":
@@ -111,6 +124,7 @@ def evaluate(args: argparse.Namespace) -> dict:
             items = [it for it in items if it.kind == args.kind]
         if args.limit:
             items = items[: args.limit]
+        items = take_evenly(items, args.sample)
         if not items:
             continue
 
@@ -149,6 +163,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-new-tokens", type=int, default=384)
     ap.add_argument("--max-len", type=int, default=1024)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--sample", type=int, default=None,
+                    help="evenly-spaced subsample of each suite (generation is slow)")
     ap.add_argument("--show-errors", type=int, default=0)
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)

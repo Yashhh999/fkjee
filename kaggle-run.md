@@ -11,31 +11,40 @@ Knobs at the top of the cell:
 
 | knob | values | meaning |
 |---|---|---|
-| `PROBE` | `True` / `False` | run the frozen-feature probe first (~10 min, decides everything) |
-| `RUN` | `"rankers"`, `"tinybert"`, `"minilm-l6"`, `"minilm-l12"`, `"generators"`, `"none"` | what to train |
+| `PROBE` | `True` / `False` | run the frozen-feature probe first (~10 min). Already run: verdict was "no generalising signal", so it is off by default |
+| `RUN` | `"smollm2-135m"`, `"smollm2-360m"`, `"qwen2.5-0.5b"`, `"qwen2.5-1.5b"`, `"generators"`, `"rankers"`, `"tinybert"`, `"minilm-l6"`, `"minilm-l12"`, `"none"` | what to train (any config name or substring works) |
 | `LIMIT` | `None`, or an int | use only N train items (smoke test) |
 | `EPOCHS` | `None`, or a float | override the config's epoch count |
 
-Timings on one T4 (configs as shipped, `max_len=384`, 4 epochs):
+Timings on one T4 (configs as shipped, one GPU):
 
 | stage | wall clock |
 |---|---|
 | probe (3 encoders × 2 query modes × 2 poolings) | ~10 min |
 | `tinybert` (4.4M, 6 epochs) | ~20 min |
-| `minilm-l6` (22.7M, 4 epochs) | ~35 min |
+| `minilm-l6` (22.7M, 4 epochs) | ~30 min |
 | `minilm-l12` (33.4M, 4 epochs) | ~50 min |
+| `smollm2-135m` (139M, 3 epochs) | ~40 min train + ~15 min eval |
+| `smollm2-360m` (362M, 3 epochs) | ~1.5 h train + ~25 min eval |
+| `qwen2.5-0.5b` (494M, 3 epochs) | ~2.5 h train + ~40 min eval |
+| `qwen2.5-1.5b` (1.5B, 3 epochs) | ~4-5 h train + ~1 h eval |
 
-`RUN="rankers"` is the full predict track (~1 h 45 m including the probe). Set `LIMIT = 400`,
-`EPOCHS = 1`, `PROBE = False` for a ~3-minute pipeline smoke test before the real run.
+`RUN="generators"` is all four (~10 h, more than a session). The default below is the 135M
+generator only: it is the smallest model that can actually *derive* an answer, and it decides
+whether the whole generative track is worth the GPU hours. Run it first, then step up in size.
+
+Generator eval is generation-bound, so it scores an evenly-spaced **500-question** slice of the
+holdout (plus all 94 JEEBench questions). n is printed in every row; 500 questions is ±2% SE.
+The rankers were evaluated on the full 1,684.
 
 ```python
-# ============ fkjee: ranker fix run (Kaggle, GPU) ============
+# ============ fkjee: generator track (Kaggle, GPU) ============
 # Settings -> Internet ON, Accelerator -> GPU.  Optional secret: HF_TOKEN
 import os, pathlib, subprocess, sys
 
-PROBE  = True        # frozen-feature probe first; ~10 min and it decides the run
-RUN    = "rankers"   # "rankers" | "tinybert" | "minilm-l6" | "minilm-l12" | "generators" | "none"
-LIMIT  = None        # e.g. 400 for a 3-minute smoke test
+PROBE  = False       # already run: "no generalising signal" -- keep off
+RUN    = "smollm2-135m"   # "smollm2-135m" | "smollm2-360m" | "qwen2.5-0.5b" | "qwen2.5-1.5b" | "generators" | "rankers" | "none"
+LIMIT  = None        # e.g. 200 for a 5-minute smoke test
 EPOCHS = None        # e.g. 1 to sanity-check the pipeline
 REPO   = "https://github.com/Yashhh999/fkjee"
 DEST   = pathlib.Path("/kaggle/working/fkjee")
@@ -151,6 +160,31 @@ publishable negative result, not a bug.
 
 Afterwards, `results/sweep.md` has `dev | holdout | JEE | NEET | per-subject | all four ablations`
 per model, and `results/<name>.preds.jsonl` has every prediction for error analysis.
+
+### Reading the generator run
+
+Generators are scored by exact match on the parsed letter (or number for integer questions), not
+by cross-entropy, so watch these instead:
+
+* **`parsed=1.00`** — every generation contained a recoverable `\boxed{X}` / "option (C)" answer.
+  A parsed rate below ~0.95 means the format is the problem, not the physics; look at
+  `results/<name>.preds.jsonl` → `raw`.
+* **accuracy vs `majority_baseline`** — `summarize()` records the most common gold letter's share.
+  If the model's score equals that number, it has learned a letter prior, not answers. The
+  `pred_distribution` in the same record shows it directly (e.g. 80% "C").
+* **per-subject spread** — a real model is not flat across math/physics/chemistry. Uniform
+  ~0.25 everywhere is the same collapse the rankers showed.
+* **JEEBench** — out-of-domain JEE Advanced: expect it *below* the main holdout. A model that
+  scores higher on JEEBench than on the in-domain holdout is suspicious (likely leakage into
+  pretraining, or a parsing artefact).
+
+The training loss for a generator is next-token CE over the answer/rationale, **not** accuracy, so
+it falling from ~2 to <1 only proves the model learned the *format* of the solutions. That is why
+the generation eval, not the loss, decides.
+
+**What to send back for a generator run:** the `loss` lines from the first 200 steps, the
+`holdout` and `jeebench` rows with `n`, `parsed`, and the `pred_distribution` block from
+`results/<name>.json`.
 
 **What to send back:** the probe summary block, the `eval_loss`/`eval_accuracy` lines from the
 first 300 steps of each model, and the final `results/sweep.md` table.

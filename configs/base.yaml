@@ -14,6 +14,8 @@ query_mode: full
 head_lr: null          # separate LR for a *fresh* head; null = use lr. The
                        # ms-marco cross-encoder head is pretrained: leave null.
 eval_steps: 100        # eval_loss is the honest 4-way CE; watch it, not "loss"
+eval_limit: 500        # cap each eval suite: dev is 517 raw (~370 MCQ), so this
+                       # covers all of dev; generators use 500 holdout questions
 lora_r: 16
 lora_alpha: 32
 lora_dropout: 0.05

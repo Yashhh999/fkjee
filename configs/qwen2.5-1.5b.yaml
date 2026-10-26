@@ -6,3 +6,6 @@ epochs: 3
 lr: 1.5e-4
 batch_size: 2
 grad_accum: 16
+
+# Generation eval batch (KV cache grows with prompt length).
+eval_batch_size: 8

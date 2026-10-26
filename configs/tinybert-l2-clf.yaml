@@ -11,3 +11,8 @@ head_lr: null          # pretrained ms-marco head: use the encoder LR
 batch_size: 8
 grad_accum: 2
 eval_steps: 100
+
+# Save every eval so load_best_model_at_end can reload the peak-dev model.
+save_steps: 100
+save_total_limit: 2
+push_checkpoints: false   # only the selected best weights go to the Hub

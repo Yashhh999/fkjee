@@ -13,8 +13,14 @@ shortcut and forces it to match content.
 Ablations (`--ablate`) exist because a 4-way task with a 25% floor is trivially
 cheatable:
     question : blank the question, keep options  -> tests option-shape priors
-    options  : blank option text, keep question  -> tests whether content matters
+    solo     : drop the option set from the query, score question vs one option
+               (the classic cross-encoder form)  -> tests reliance on contrast
     shuffle  : permute options per question      -> tests letter/position bias
+
+There is deliberately no "blank the option text" ablation: with all four
+candidate texts replaced by the same placeholder the four scores are identical,
+so the softmax is uniform and the accuracy is 0.25 *by construction*.  It looks
+like a clean result and measures nothing.
 """
 
 from __future__ import annotations
@@ -113,13 +119,14 @@ class MCQDataset(Dataset):
                 gold_idx = perm.index(gold_idx)
 
             question = "" if ablate == "question" else item.question
-            query = build_query(item, options, question,
-                                include_options=query_mode == "full")
+            # `solo` scores each option against the question alone instead of
+            # against the whole option set (the classic cross-encoder form).
+            show_options = query_mode == "full" and ablate != "solo"
+            query = build_query(item, options, question, include_options=show_options)
 
             encs = []
             for opt in options:
-                doc = "option" if ablate == "options" else opt
-                encs.append(encode_pair(tokenizer, query, doc, max_len))
+                encs.append(encode_pair(tokenizer, query, opt, max_len))
             self.encodings.append(encs)
             self.labels.append(gold_idx)
             self.gold_letters.append(LETTERS[gold_idx])
@@ -325,7 +332,7 @@ def train(args: argparse.Namespace) -> Path:
                     query_mode=query_mode)
 
     dev_items = load_jsonl(data_dir / "dev.jsonl")
-    dev_limit = int(cfg.get("eval_limit", 256))
+    dev_limit = int(cfg.get("eval_limit", 500))
     eval_ds = MCQDataset(dev_items[:dev_limit], tokenizer, max_len=cfg.get("max_len", 384),
                          query_mode=query_mode)
 
@@ -333,7 +340,18 @@ def train(args: argparse.Namespace) -> Path:
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"model={cfg['model_id']} total_params={total/1e6:.2f}M trainable={trainable/1e6:.2f}M")
-    print(f"train questions={len(ds)}")
+    print(f"train questions={len(ds)} | dev questions={len(eval_ds)} (chance 0.25)")
+
+    eval_steps = int(cfg.get("eval_steps", 100))
+    save_steps = int(cfg.get("save_steps", 500))
+    # Saving the last step is how a model that peaked at dev 0.328 ends up
+    # shipped at 0.25: the run overfits after the peak.  Keep the best dev
+    # checkpoint instead.  transformers requires save_steps % eval_steps == 0
+    # and that every eval step has a saved checkpoint to reload.
+    select_best = bool(cfg.get("load_best_model_at_end", True)) and save_steps % eval_steps == 0
+    if not select_best:
+        print(f"[warn] save_steps={save_steps} is not a multiple of eval_steps={eval_steps}; "
+              "the last checkpoint will be saved, not the best one")
 
     targs = TrainingArguments(
         output_dir=str(out_dir / "checkpoints"),
@@ -350,10 +368,13 @@ def train(args: argparse.Namespace) -> Path:
         lr_scheduler_type="cosine",
         logging_steps=int(cfg.get("logging_steps", 50)),
         save_strategy="steps",
-        save_steps=int(cfg.get("save_steps", 500)),
+        save_steps=save_steps,
         save_total_limit=int(cfg.get("save_total_limit", 2)),
         eval_strategy="steps",
-        eval_steps=int(cfg.get("eval_steps", 100)),
+        eval_steps=eval_steps,
+        load_best_model_at_end=select_best,
+        metric_for_best_model="accuracy" if select_best else None,
+        greater_is_better=True if select_best else None,
         per_device_eval_batch_size=int(cfg.get("eval_batch_size", 16)),
         logging_first_step=True,
         report_to="none",
@@ -388,6 +409,7 @@ def train(args: argparse.Namespace) -> Path:
     meta = {
         "track": "ranker",
         "config": cfg,
+        "selected": "best-dev" if select_best else "last-step",
         "total_params": total,
         "trainable_params": trainable,
         "train_questions": len(ds),
