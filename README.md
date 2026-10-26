@@ -192,10 +192,11 @@ not a result. The 33M model is *below* the 8-parameter lexical baseline.
 
 The above-chance cells in the sweep are all small-n and not reliable:
 
-* chemistry (`minilm-l6` 0.302, n≈345, SE ±2.5 pp) — the only cell worth re-testing on a bigger
-  chemistry holdout;
-* NEET (0.332, n=187, SE ±3.4 pp) and JEEBench (0.308-0.351, n=94, SE ±4.9 pp) — both inside
-  ~2 SE of chance;
+* chemistry (`minilm-l6` 0.302, n=344, SE ±2.3 pp) — 2.2 SE above chance, the only larger slice
+  that even looks interesting; it is one of ~10 slices tested, so it is not significant after
+  correcting for that;
+* NEET (0.332, n=187, SE ±3.2 pp) and JEEBench (0.308-0.351, n=94, SE ±4.9 pp) — both inside
+  ~2.6 SE of chance, and NEET is all of 187 questions;
 * the ablations move by less than 1 SE in either direction, so there is no evidence the model uses
   option content, option order, or letter position.
 
