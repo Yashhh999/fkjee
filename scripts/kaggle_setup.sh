@@ -5,6 +5,10 @@ set -euo pipefail
 python -m pip install -q --upgrade pip
 python -m pip install -q -e .
 
+# Kaggle ships torchao 0.10, which peft >= 0.18 rejects at LoRA injection even
+# though nothing here uses torchao. (fkjee.train also has a runtime shim.)
+python -m pip uninstall -y -q torchao || true
+
 python - <<'PY'
 import torch, transformers, peft
 print("torch      ", torch.__version__, "| cuda:", torch.cuda.is_available(),

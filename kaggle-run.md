@@ -59,6 +59,10 @@ else:
     subprocess.run(["git", "clone", "--depth", "1", REPO, str(DEST)], check=True)
 os.chdir(DEST)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], check=True)
+# Kaggle's image ships torchao 0.10, and peft >= 0.18 refuses to inject LoRA
+# while it is visible ("incompatible version of torchao").  Nothing here uses
+# it, so drop it; fkjee.train also keeps a shim for the same problem.
+subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"], check=False)
 
 print(subprocess.run(
     [sys.executable, "-c",

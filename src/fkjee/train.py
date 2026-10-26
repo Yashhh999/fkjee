@@ -100,7 +100,32 @@ class PadCollator:
         }
 
 
+def _disable_old_torchao() -> None:
+    """Stop peft from dying on the torchao that Kaggle preinstalls.
+
+    peft >= 0.18 raises `ImportError: Found an incompatible version of torchao`
+    while injecting LoRA whenever *any* torchao below 0.16 is visible, even
+    though this repo never uses torchao.  The Kaggle image ships 0.10.0, so the
+    whole run dies at model construction.  Hide it from peft's dispatcher.
+    """
+    try:
+        import importlib.metadata as md
+
+        from packaging.version import parse
+
+        version = md.version("torchao")
+        if parse(version) >= parse("0.16.0"):
+            return
+        from peft.tuners.lora import torchao as _torchao
+
+        _torchao.is_torchao_available = lambda: False
+        print(f"[warn] torchao {version} is too old for peft; torchao dispatch disabled")
+    except Exception:
+        return
+
+
 def build_model(cfg: dict, dtype: torch.dtype):
+    _disable_old_torchao()
     kwargs = _dtype_kwarg(dtype)
     if cfg.get("load_in_4bit"):
         from transformers import BitsAndBytesConfig
